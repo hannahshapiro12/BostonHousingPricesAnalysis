@@ -1,0 +1,264 @@
+---
+title: ""
+author: "439 Project Group"
+date: "5/3/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{css, echo=FALSE}
+##forces stuff to start on another page if necessary
+@media print {  
+  .pagebreak { page-break-before: always; }
+  ##shrinks image, comment out/adjust if necessary
+}
+img {
+  max-width:60% !important;
+}
+body {
+  font-family: TimesNewRoman, "Times New Roman", Times, Baskerville, Georgia, serif;
+}
+p, li {
+  font-size: 16px; ##12 in css
+}
+p {text-indent: 30px;}
+h4 {font-weight: bold;}
+h5 {font-style: italic;}
+```
+
+
+```{r include=FALSE}
+#Importing data, libraries: 
+col = c('CRIM','ZN','INDUS','CHAS','NOX','RM','AGE','DIS','RAD','TAX', 'PTRATIO','B','LSTAT','MEDV')
+housing <- read.csv(file="housing.csv", sep = "", header=FALSE, col.names=col)
+nfull <- length(housing$MEDV)
+library(moments)
+library(MASS)
+library(car)
+library(nlme)
+library(leaps)
+```
+
+
+#### I. Introduction to the Boston housing dataset
+The data consists of 506 observations across 13 predictors and 1 response variable.  None of the data is missing and has no obscure values to handle. The 13 predictor variables are defined as follows:
+
+* CRIM: per capita crime rate of town
+* ZN: proportion of residential land zoned for lots over 25,000 sq.ft.
+* INDUS: proportion  of non-retail business acres per town
+* CHAS: boolean, equals 1 if tract bounds river
+* NOX: nitric oxides concentration
+* RM: average number of rooms per dwelling
+* AGE: proportion  of occupied units built prior to 1940
+* DIS: distances from employment centres
+* RAD: index of accessibility to radial highways
+* TAX: full-value property-tax rate
+* PTRATIO: pupil-teacher ratio by town
+* B: proportion of African Americans in the area
+* LSTAT: % lower status of the population
+
+<br>
+
+#### II.A. Initial Data Analysis 
+When looking at the distribution of the response variable, MEDV - the median home value in \$1,000, we observe the histogram below. The data is mainly unimodal and somewhat symmetric, barring the uptick in houses priced at \$50,000.  It is possible the data was capped at this mark so higher priced homes may have been set at a maximum price of $50,000 leading to this uptick.  
+```{r echo=FALSE, fig.align="center"}
+hist(housing$MEDV, breaks = 28, xlab = "MEDV", main = 'Histogram of MEDV')
+```
+
+<br>
+
+#### II.B. Running the Initial Full Model
+Fitting a least squares regression model on all 13 variables, we end up with 14 predicted beta values from 506 data points that can be seen below.  The full model explains just over 74% of the variability in the response and also gives a baseline adjusted R-squared value of 0.7338.  All of the predictors are significant at a .002 level or below except for INDUS and AGE.
+```{r echo=FALSE}
+fullModel = lm(MEDV~CRIM+ZN+INDUS+CHAS+NOX+RM+AGE+DIS+RAD+TAX+PTRATIO+B+LSTAT, data=housing); summary(fullModel)
+```
+The signs of the coefficients also often fit our expectations.  For example, a higher crime rate, higher concentration of nitric oxides, farther distances from employment centers, higher taxes, higher student to teacher ratios, and a larger proportion of low status population all lower the expected median price of housing.  These are all more undesirable characteristics of property, and thus buyers must be compensated for these by paying a lower price for housing which is indicated by the negative coefficients of the full model.
+
+<br>
+
+#### II.C. Model Diagnostics
+Looking at the residuals and R-student residuals from the full model, we see there is somewhat of a double bow, with much more variance in the residuals for the middle of the fitted values than at the extremes.  There is also a line that goes from the top middle of the graphs to the middle right, indicating that there may be another predictor that is significant for predicting more expensive homes.  Overall, the residuals are not randomly or evenly distributed, therefore violating the constant variance assumption of the data.
+
+```{r residuals, echo=FALSE, fig.show="hold", out.width="45%"}
+plot(fitted(fullModel), residuals(fullModel), xlab = "Fitted", ylab = "Residuals"); abline(h=0)
+plot(fitted(fullModel), rstudent(fullModel), xlab = "Fitted", ylab = "R-student"); abline(h=0)
+```
+
+In terms of the normalcy assumption, we examine the QQ plot of the residuals. Overall, the residuals follow an S shape, indicating shorter tails than expected. There is also a more  extreme divergence from the expected line as residuals increase, indicating that a sizable chunk of houses are under-predicted in terms of their median price according to the full model.However, for average priced homes, the normality assumption seems to hold, except around the extremes. Furthermore, we compute a Shapiro-Wilk statistic of W=0.90138 with a p-value less than 2.2e-16 which means we reject the assumption that the errors are normally distributed.
+```{r echo=FALSE, fig.align="center"}
+qqnorm(residuals(fullModel)); qqline(residuals(fullModel))
+```
+
+With 14 predicted coefficients and 506 observations, we compute a leverage bound of $2* \frac{14}{506} = 0.055336$ and find that 36 points have a large leverage by violating this bound. These 36 points are then potential outliers in some x-dimension for their observations.  When looking for outliers in the y-dimension, in this case median housing price, we use the r-student residuals and compute a bound based on a t-distribution with 506-14-1=491 degrees of freedom.At a .05 level, there is an uncorrected bound of 1.9648 at which 26 points violate this bound. With the Bonferroni correction, the new bound is 3.9258 in which only 3 points violate this bound. 
+```{r echo=FALSE, fig.align="center"}
+levFull <- lm.influence(fullModel)$hat
+plot(levFull, type = "l", ylab = "Leverage", main = "Leverage of Data"); abline(h=2*(13+1)/506)
+```
+
+Finally, computing the Cook’s distance for each point, there are no extremely influential points since no point has a Cook’s distance greater than 0.1657.  However, there are 6 points that violate a .05 bound and these are the most influential points in the full model.
+```{r echo=FALSE, fig.align="center"}
+cookFull = cooks.distance(fullModel)
+plot(cookFull, ylab="Cook's Distance", main="Cook's Distance")
+cookPoints = as.numeric(names(cookFull[cookFull > .05])) #6 such points
+```
+```{r include=FALSE, fig.align="center"}
+# for prepration of other chunks
+housingNoCook = housing[-cookPoints,]
+modelNoCook = lm(MEDV~CRIM+ZN+INDUS+CHAS+NOX+RM+AGE+DIS+RAD+TAX+PTRATIO+B+LSTAT, data=housingNoCook)
+modelNoCookNoIndusAge = lm(MEDV~CRIM+ZN+CHAS+NOX+RM+DIS+RAD+TAX+PTRATIO+B+LSTAT, data=housingNoCook)
+```
+
+To check for multicollinearity, we first examined the variance inflation factors; the VIF of each predictor is printed below. Looking at the VIFs, we see that none are greater than 10. On first glance, it may seem like nothing is wrong; however, there are signs that collinearity may be an issue when looking at other measures. 
+```{r echo=FALSE}
+vif(fullModel)
+```
+
+For example, here, we see the condition values, derived from the eigenvalues of the data. The rather large range of the condition values indicate possible multicollinearity. 
+```{r echo=FALSE}
+x <- model.matrix(fullModel)[,-1]
+e <- eigen(t(x) %*% x)
+sqrt(e$val[1]/e$val)
+```
+
+The below is a printout of the correlation values above 0.7, as well as the regressors that have that correlation value. Looking at the printout, we see that several predictors have high correlation with each other, indicating that not all the regressors are needed to predict housing price, as some can represent the others in the model.
+```{r echo=FALSE}
+cor_matrix <- cor(housing)
+cor_index <- order(abs(cor_matrix), decreasing=TRUE)  ##indexes of the largest values
+cor_index <- cor_index[! cor_index %in% head(cor_index,14)] ##remove 1s
+top_index <- head(cor_index,16)[c(TRUE,FALSE)] ##get index of top values
+for (i in 1:length(top_index)) {
+  row = rownames(cor_matrix)[arrayInd(top_index, dim(cor_matrix))[i,1]]
+  col = colnames(cor_matrix)[arrayInd(top_index, dim(cor_matrix))[i,2]]
+  print(paste(row, "x", col, "=", cor_matrix[top_index[i]]))
+}
+```
+
+<br>
+
+#### II D: Correcting Model Inadequacies
+##### Box-Cox transformations
+We have some assumptions for the linear model. We assume that our underlying data should have constant independent variance (homoscedasticity). In addition, the data should follow the normal distribution. If the data violate the assumptions significantly, the model may not fit the data very well. In that case, we may need to address this issue and one of the techniques is the Box-Cox transformation. As we have seen that there are some influential points, for Box-Cox analyses we remove those points. In addition, we remove the “INDUS” and “AGE” variables for this part too.  
+
+For Box-Cox transformation all the responses should be positive. In our case, we have found that all the responses of housing price data have positive value (see below). Therefore, we can apply Box-Cox safely.
+```{r}
+summary(housing$MEDV)
+```
+
+First, we check if the data needs transformation. Below the left figure shows that $\lambda=1$ is not in the 95% CI. Perhaps, we need transformation. To get the optimal $\lambda$ we narrow the range of $\lambda$ in the right figure. It turns out the optimal $\lambda$ is around 0.2.
+
+```{r echo=FALSE, fig.show="hold", out.width="45%"}
+boxcox(modelNoCookNoIndusAge,plotit =T)
+bc=boxcox(modelNoCookNoIndusAge,plotit=T,lambda=seq(-0.1,.5,by=0.1))
+```
+
+Next, we use 0.2 as a power of the response and fit the model again. It seems with Box-Cox transformation the data looks better. Before the transformation, the residuals vs fitted plot looks parabolic (below-left figure). 
+
+```{r echo=FALSE, fig.show="hold", out.width="45%"}
+# modelNoCookNoIndusAgetransformed = lm((MEDV)^(.2)~CRIM+ZN+CHAS+NOX+RM+DIS+RAD+TAX+PTRATIO+B+LSTAT, data=housingNoCook)
+# plot(modelNoCookNoIndusAgetransformed)
+```
+
+##### Serial correlation analysis
+
+##### Weighted Least Squares Regression
+Attempting a weighted least squares regression did not prove useful for this dataset.  First, we looked to identify which predictor was most correlated with the residuals from the full model.  However, upon investigating, we found that that the largest absolute value of these correlations was 2.5e-15 which meant that all the predictors were functionally zero correlated with the residuals as can be seen below. Even when picking from the slightly more correlated variables such as PTRATIO, RM, or TAX, there was not enough of a correlation to be meaningful.  Furthermore, with over 500 data points, attempting to group near points into groups proved very difficult, both by hand and by automation.  This made any regressions run on sample variance vs sample means insignificant and often had negative slopes. This in turn made predicting weights impossible since the weights would eventually turn negative from these fits and are then unusable.  After multiple attempts with different variables and different grouping methods for the points, we concluded that weighted least square regression was not helpful in modeling our data.
+
+<br>
+
+#### II E. Model Selection
+##### Exhaustive Model Selection Search
+One initial method we used to find a more suitable model with less regressors is an exhaustive search. Using the `regsubsets()` function from the “leaps” package on R, we are given the best particular models (based on Mallow’s C~p~) for a given number of regressors. Then, we compared these thirteen models by examining various criteria. Below are graphs of all the models’ R^2^, BIC, and Mallow’s C~p~:
+```{r, fig.align="center", echo=FALSE}
+b<- regsubsets(MEDV~., data=housing, nbest = 1, nvmax = NULL, force.in=NULL, force.out = NULL, method = 'exhaustive')
+rs <- summary(b)
+plot(2:14, rs$adjr2, xlab = "# parameters", ylab = "Adj. R^2")
+plot(2:14, rs$bic, xlab = "# parameters", ylab = "BIC")
+plot(2:14, rs$cp, xlab = "# parameters", ylab = "Mallow's Cp"); abline(0,1); text(2:14 +.25, rs$cp, round(rs$cp, 1), cex=0.8)
+plot(b, scale = "adjr2")
+```
+
+The model with the highest R^2^ and the minimum BIC is the p=12 model, or the model with eleven regressors. We can see from the final visual plot that this model excludes the regressors INDUS and AGE - unsurprising, given that these two were not significant in the initial summary of the full model. Furthermore, as we see in the plot for Mallow’s C~p~, the only models which have that a C~p~ remotely close to p are the models for p=12, p=13, and p=14, the first of which would be the smallest number of parameters and thus the ideal. 
+
+However, we know from examining the correlation matrix and the adjusted R^2^ that more regressors could be excluded from the modeling. For example, we know that TAX and RAD have a very high correlation of about 0.91, so then one of them could be dropped since one could represent the other. In addition, while p=12 yields the highest R^2^, the other models (from 6 to 14) also have relatively high R^2^ that aren’t far off either, so those models should suffice as well. Thus, we turn to other methods to find a suitable model. 
+
+##### Backwards and Forwards Selection Models
+Both backwards and forward selection models were created in R with a cutoff p-value of 0.01. In the backwards model, we used the `step()` function because the automation stopping at 0.05 wasn’t a concern with the extremely high individual parameter significance levels found from the full model. This resulted in the exclusion of 2 variables: AGE and INDUS, which is consistent with the findings from the full model. Though there are 2 fewer parameters in this model, we did not find it to be much better than the full model in predicting the median house value of Boston homes.
+
+We decided to use a less automatic approach when creating a forward selection model by using the `add1()` function to select our parameters. This yielded a model that would be able to tell us much more, as only 6 parameters were selected as significant at the 0.01 level. These parameters included LSTAT (lower status percentage), RM (number of rooms in a dwelling), PTRATIO (pupil to teacher ratio), DIS (distance from 5 key Boston employment centers), NOX (nitric oxide in air percentage) and CHAS (whether or not the Charles River is near the zone). After running a regression using only these parameters, we found an R^2^ adjusted value of 0.71 compared to the 0.73 of the full model with 13 parameters. This leads us to believe that these parameters are the most significant, and were the factors we used in creating our final model. Additionally we removed the influential points and performed Box Cox transformations on these 6 parameters to arrive at our final model.
+
+
+<br>
+
+#### II F. Final Model Diagnostics
+Our proposed final model combines the forward model selection along with Box Cox transformations and the removal of points considered influential at the 0.05 level. This yields a model where all of the parameters are considered significant and an R-squared adjusted value of 0.779. The first assumption that needs to be checked for this model is the normality assumption. First we created a QQ plot based on the model’s residuals.
+
+```{r include=FALSE}
+model<-lm(MEDV~LSTAT+RM+PTRATIO+DIS+NOX+CHAS, data=housing)
+cookNew = cooks.distance(model)
+plot(cookNew, ylab='Cooks Distance', main='Cook Distance', type='l')
+cookPointsN <- as.numeric(names(cookNew[cookNew > .05]))
+cookPointsN
+modelnoCook<-housing[-cookPointsN,]
+```
+
+```{r, fig.align='center', echo=FALSE}
+
+fit2<-lm(MEDV^(0.38)~LSTAT+RM+PTRATIO+DIS+NOX+CHAS, data=modelnoCook)
+plot(fit2, which=2)
+
+```
+As can be seen above, the model seems to be vaguely normal in its middle values, but then there is considerable skew as the data reaches the more extreme values. The “S” shape seen here likely means that the data isn’t following the normality assumption, and instead is short-tailed. To further prove this point, we ran a Shapiro test on the new model. 
+	
+```{r, echo=FALSE}
+shapiro.test(residuals(fit2))
+```
+Although it is larger than before, the p-value here is still significant, which is not what we want to see when trying to show that a model is normal. 
+Next we wanted to test the constant variance assumption. This was done by plotting both the regular residuals and the r-student residuals. Both followed a similar trend, so only the regular residuals are depicted below.
+
+```{r, echo=FALSE}
+plot(fit2, which=1)
+```
+
+The Box Cox transformation is helping to correct the issue of nonconstant variance, especially on the ends. However, the nonconstant variance assumption is still not perfectly met, as shown by the converging toward the right side of the plot. This is another important point to note when using this model to predict housing prices.
+
+There were 67 points that were considered to have a large leverage from the original model. This decreased down to 62 points after the transformation, with the largest point having a leverage of 0.078, which is marginally smaller than before, where the largest of the 67 leverage points of the original model had a value of 0.081. 
+	
+In terms of outliers, there are 30 points when there are no corrections to our critical p-value. This decreases down to 2 points when we applied Bonferroni corrections, meaning that our final proposed model cuts down from the 3 outliers from before in our prediction of housing prices.
+
+Originally there were 7 points that were considered influential in our original model, as were seen above. Those points were removed in the creation of our final proposed model.  
+
+```{r, fig.align='center', echo=FALSE}
+cookNew = cooks.distance(fit2)
+plot(cookNew, ylab='Cooks Distance', main='Cook Distance', type='l')
+```
+This is the output of Cook’s distance in our final proposed model. While there is still a peak near the right side of our data, there is less of a difference in the rest of the distances as before, as seen by the smaller scale in the y-axis. Only 3 of the high leverage points are considered influential in this model, decreasing from the original 7 points. 
+
+Finally, we tested whether our parameters were affected by multicollinearity. Below is the output showing our conditioned eigenvalues.
+
+```{r, echo=FALSE}
+x<-model.matrix(fit2)[,-1]
+e<-eigen(t(x)%*%x)
+sqrt(e$val[1]/e$val)
+```
+
+None of the eigenvalues are extremely high, which is a good sign. This doesn’t tell us enough to make any conclusions, so we then ran the `vif()` function in R to get the coefficients of variance inflation in each of our parameters.
+
+```{r include=FALSE}
+library(faraway)
+vi<-vif(x)
+```
+
+```{r, echo=FALSE}
+vi
+```
+
+All of the parameters have a variance inflation coefficient less than 5 but greater than 1, so we would consider variance inflation to have a moderate effect on our model. 
+
+<br>
+
+#### III. Conclusion
+Our model also has the limitations associated with the assumptions of normality and constant variance. This is important to note when using our final model, as that could be affecting the trend of median house price in a way that our linear model is not catching. Alongside with this the Boston housing data set is quite old, as it was made from census data from the 1970s. Housing prices have drastically changed since then, which could completely alter the trend we see from this data set.
+
+Overall, our final model is predicting that the median house price is increasing as each of our 6 parameters of LSTAT, CHAS, RM, NOX, DIS, and PTRATIO increase. This trend seems to be linear in the middle of the model, and we believe that prediction of MEDV would be accurate at those values. This trend changes as we approach the extreme values in our data set, which leads us to believe that the relationship as we get to extremely cheap or extremely expensive housing is no longer linear. Further analysis is needed to prove or disprove this assumption, which would be a good next step to look into in the future.
